@@ -21,7 +21,7 @@ python hmm.py
 ```
 Make sure the 'nifty50.csv' file is in the same directory as your Python script.
 
-View chart.html for Predection
+View [chart.html](https://abhishek-shaw.github.io/nifty-hmm-stock-prediction/chart.html) for Predection
 
 ### Disclaimer :
 This implementation provides a basic framework for predicting stock market trends using HMM. However, please note that predicting stock market movements is a complex task, and this simple model may not capture all the intricacies of real market behavior. It's always recommended to use multiple analysis techniques and consult with financial experts before making investment decisions.
