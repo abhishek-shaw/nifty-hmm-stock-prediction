@@ -77,7 +77,7 @@ df['Trend'] = df_cleaned['Trend']
 
 
 # Improved price prediction function
-def predict_next_price(model, last_price, last_features, n_days=30):
+def predict_next_price(model, last_price, last_features, n_days=1):
     predictions = []
     states = []
     current_features = last_features.copy()
@@ -107,10 +107,10 @@ def predict_next_price(model, last_price, last_features, n_days=30):
 # Predict future prices
 last_features = [df['Returns'].iloc[-1], df['MA20'].iloc[-1], df['RSI'].iloc[-1], df['Volatility'].iloc[-1], df['MACD'].iloc[-1], df['Signal'].iloc[-1]]
 last_price = df['Close'].iloc[-1]
-future_prices, future_states = predict_next_price(model, last_price, last_features, n_days=30)
+future_prices, future_states = predict_next_price(model, last_price, last_features, n_days=1)
 
 # Add future predictions to DataFrame
-future_dates = pd.date_range(start=df.index[-1] + pd.Timedelta(days=1), periods=30, freq='D')
+future_dates = pd.date_range(start=df.index[-1] + pd.Timedelta(days=1), periods=1, freq='D')
 future_df = pd.DataFrame({
     'Close': future_prices,
     'Trend': [trend_map[state] for state in future_states]

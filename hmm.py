@@ -1,119 +1,135 @@
 import pandas as pd
 import numpy as np
-from hmmlearn import hmm
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.model_selection import train_test_split
+from hmmlearn import hmm
 import plotly.graph_objects as go
 
-# Load the data
-df = pd.read_csv('nifty50.csv')
-df['Date'] = pd.to_datetime(df['Date'], format='%d-%b-%Y')
-df = df.sort_values('Date')
-df.set_index('Date', inplace=True)
-
-# Calculate returns
-df['Returns'] = df['Close'].pct_change()
-df = df.dropna()
-
-# Feature Engineering: Adding Technical Indicators
-def calculate_rsi(data, window):
+def calculate_rsi(data, window=14):
     delta = data.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
-# Calculate technical indicators
-df['MA20'] = df['Close'].rolling(window=20).mean()  # 20-day moving average
-df['RSI'] = calculate_rsi(df['Close'], window=14)  # 14-day RSI
-df['Volatility'] = df['Returns'].rolling(window=20).std()  # 20-day volatility
+def calculate_macd(data, short_window=12, long_window=26, signal_window=9):
+    short_ema = data.ewm(span=short_window, adjust=False).mean()
+    long_ema = data.ewm(span=long_window, adjust=False).mean()
+    macd = short_ema - long_ema
+    signal = macd.ewm(span=signal_window, adjust=False).mean()
+    return macd, signal
 
-# Calculate MACD
-ema_short = df['Close'].ewm(span=12, adjust=False).mean()  # 12-day EMA
-ema_long = df['Close'].ewm(span=26, adjust=False).mean()   # 26-day EMA
-df['MACD'] = ema_short - ema_long  # MACD line
-df['Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()  # Signal line
+def calculate_volatility(data, window=20):
+    return data.rolling(window=window).std()
 
-# Prepare the data for HMM
-features = ['Returns', 'MA20', 'RSI', 'Volatility', 'MACD', 'Signal']
-X = df[features].dropna().values
-y = df['Close'][df[features].dropna().index].values  # Use close prices as labels
+def calculate_ema(data, window=20):
+    return data.ewm(span=window, adjust=False).mean()
 
-# Split the data into training and testing sets
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, shuffle=False)
+def identify_trend_dow_dynamic(df, window=2, timeframe='W'):
+    resampled_df = df.resample(timeframe).agg({'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last'})
+    resampled_df['Higher_High'] = resampled_df['High'].rolling(window=window).apply(lambda x: x.iloc[-1] == x.max())
+    resampled_df['Lower_Low'] = resampled_df['Low'].rolling(window=window).apply(lambda x: x.iloc[-1] == x.min())
+    resampled_df['Higher_Low'] = resampled_df['Low'].rolling(window=window).apply(lambda x: x.iloc[-1] > x.iloc[0])
+    resampled_df['Lower_High'] = resampled_df['High'].rolling(window=window).apply(lambda x: x.iloc[-1] < x.iloc[0])
 
-# Scale the features
-scaler = StandardScaler()
-X_train_scaled = scaler.fit_transform(X_train)
-X_test_scaled = scaler.transform(X_test)
 
-# Define and train the HMM
-n_states = 5
-model = hmm.GaussianHMM(n_components=n_states, covariance_type="diag", n_iter=1000, random_state=42)
+    def get_trend(row):
+        if row['Higher_High'] and row['Higher_Low']:
+            return 'bullish'
+        elif row['Lower_Low'] and row['Lower_High']:
+            return 'bearish'
+        else:
+            return 'sideways'
 
-# Fit the model and predict hidden states
-model.fit(X_train_scaled)
-hidden_states = model.predict(X_train_scaled)
+    resampled_df['trend'] = resampled_df.apply(get_trend, axis=1)
+    return resampled_df.reindex(df.index, method='ffill')['trend']
 
-# Map hidden states to trend labels
-trend_map = {
-    0: 'Strong Bullish',
-    1: 'Mild Bullish',
-    2: 'Sideways',
-    3: 'Mild Bearish',
-    4: 'Strong Bearish'
-}
+def identify_trend_dow(df, window=20):
+    df['Higher_High'] = df['High'].rolling(window=window).apply(lambda x: x.iloc[-1] == x.max())
+    df['Lower_Low'] = df['Low'].rolling(window=window).apply(lambda x: x.iloc[-1] == x.min())
+    df['Higher_Low'] = df['Low'].rolling(window=window).apply(lambda x: x.iloc[-1] > x.iloc[0])
+    df['Lower_High'] = df['High'].rolling(window=window).apply(lambda x: x.iloc[-1] < x.iloc[0])
 
-# Assign trends only to the rows in the original DataFrame that were used for training
-df.loc[df.index[:len(hidden_states)], 'Trend'] = [trend_map[state] for state in hidden_states]
+    def get_trend(row):
+        if row['Higher_High'] and row['Higher_Low']:
+            return 'bullish'
+        elif row['Lower_Low'] and row['Lower_High']:
+            return 'bearish'
+        else:
+            return 'sideways'
+
+    df['trend'] = df.apply(get_trend, axis=1)
+    return df['trend']
+
+def draw_trend_lines(df):
+    trend_lines = []
+    current_trend = None
+    start_index = 0
+
+    for i in range(len(df)):
+        if df['trend'].iloc[i] != current_trend:
+            if current_trend in ['bullish', 'bearish']:
+                end_index = i - 1
+                start_price = df['Close'].iloc[start_index]
+                end_price = df['Close'].iloc[end_index]
+                trend_lines.append({
+                    'x0': df.index[start_index],
+                    'x1': df.index[end_index],
+                    'y0': start_price,
+                    'y1': end_price,
+                    'color': 'green' if current_trend == 'bullish' else 'red'
+                })
+            current_trend = df['trend'].iloc[i]
+            start_index = i
+
+    # Add the last trend line
+    if current_trend in ['bullish', 'bearish']:
+        end_index = len(df) - 1
+        start_price = df['Close'].iloc[start_index]
+        end_price = df['Close'].iloc[end_index]
+        trend_lines.append({
+            'x0': df.index[start_index],
+            'x1': df.index[end_index],
+            'y0': start_price,
+            'y1': end_price,
+            'color': 'green' if current_trend == 'bullish' else 'red'
+        })
+
+    return trend_lines
+
+def backtest_model(model, X, y, le):
+    predictions = model.predict(X)
+    predictions = le.inverse_transform(predictions)
+    actual = le.inverse_transform(y)
+
+    correct = sum(predictions == actual)
+    total = len(predictions)
+    accuracy = correct / total
+
+    hit_ratio = {
+        'bullish': {'correct': 0, 'total': 0},
+        'bearish': {'correct': 0, 'total': 0},
+        'sideways': {'correct': 0, 'total': 0}
+    }
+
+    for pred, act in zip(predictions, actual):
+        hit_ratio[act]['total'] += 1
+        if pred == act:
+            hit_ratio[act]['correct'] += 1
+
+    for trend in hit_ratio:
+        if hit_ratio[trend]['total'] > 0:
+            hit_ratio[trend]['ratio'] = hit_ratio[trend]['correct'] / hit_ratio[trend]['total']
+        else:
+            hit_ratio[trend]['ratio'] = 0
+
+    return accuracy, hit_ratio
 
 # Calculate support and resistance levels
 def calculate_support_resistance(data, window=20):
     data['Support'] = data['Low'].rolling(window=window).min()
     data['Resistance'] = data['High'].rolling(window=window).max()
     return data
-
-df = calculate_support_resistance(df)
-
-# Predict future trend, price, support, and resistance
-last_features = [df['Returns'].iloc[-1], df['MA20'].iloc[-1], df['RSI'].iloc[-1], df['Volatility'].iloc[-1], df['MACD'].iloc[-1], df['Signal'].iloc[-1]]
-last_price = df['Close'].iloc[-1]
-
-def predict_next_price(model, last_price, last_features):
-    # Transform the last features (Returns, MA20, RSI, Volatility, MACD, Signal)
-    last_features_scaled = scaler.transform([last_features])  # Transform all features together
-    next_state = model.predict(last_features_scaled)[0]
-
-    # Instead of taking the first mean, we take the mean of the state which corresponds to our return feature
-    next_return = model.means_[next_state][0]
-
-    # Calculate the next price based on return
-    next_price = last_price * (1 + next_return)
-
-    return next_price
-
-next_price = predict_next_price(model, last_price, last_features)
-
-# Predict future support and resistance
-recent_highs = df['High'][-20:].max()
-recent_lows = df['Low'][-20:].min()
-future_support = recent_lows
-future_resistance = recent_highs
-
-# Add future prediction to the DataFrame for plotting
-future_date = df.index[-1] + pd.Timedelta(days=1)
-future_row = pd.DataFrame({
-    'Open': [np.nan],
-    'High': [np.nan],
-    'Low': [np.nan],
-    'Close': [next_price],
-    'Volume': [0],
-    'Support': [future_support],
-    'Resistance': [future_resistance],
-    'Trend': [trend_map[model.predict(scaler.transform([last_features]))[0]]]
-}, index=[future_date])
-
-df = pd.concat([df, future_row])
 
 # Function to find automated swing points based on defined thresholds
 def find_swing_points(df, window=5):
@@ -137,6 +153,64 @@ def find_swing_points(df, window=5):
 
     return swing_highs, swing_lows
 
+# Load the data
+df = pd.read_csv('nifty50.csv')
+df['Date'] = pd.to_datetime(df['Date'], format='%d-%b-%Y')
+df = df.sort_values('Date')
+df.set_index('Date', inplace=True)
+
+# Calculate technical indicators
+df['RSI'] = calculate_rsi(df['Close'])
+df['MACD'], df['Signal'] = calculate_macd(df['Close'])
+df['Volatility'] = calculate_volatility(df['Close'])
+df['EMA'] = calculate_ema(df['Close'])
+
+# Create features: percentage change and other indicators
+df['pct_change'] = df['Close'].pct_change()
+df['range'] = (df['High'] - df['Low']) / df['Close']
+
+# Identify trend using Dow Theory on weekly timeframe
+#df['trend'] = identify_trend_dow_dynamic(df)
+df['trend'] = identify_trend_dow(df)
+
+# Calculate support and Resistance
+df = calculate_support_resistance(df)
+
+
+# Drop rows with NaN values
+df.dropna(inplace=True)
+
+# Prepare features for HMM
+features = ['pct_change', 'range', 'RSI', 'MACD', 'Volatility', 'EMA']
+X = df[features].values
+
+# Normalize the features
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+# Use LabelEncoder for 'trend'
+le = LabelEncoder()
+y = le.fit_transform(df['trend'])
+
+# Split the data into training and testing sets
+X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, shuffle=False)
+
+# Train a Hidden Markov Model
+model = hmm.GaussianHMM(n_components=3, n_iter=1000, random_state=42)
+model.fit(X_train)
+
+# Predict the trend of the next day
+last_features = X_scaled[-1].reshape(1, -1)
+trend_label = model.predict(last_features)
+trend = le.inverse_transform([trend_label[-1]])[0]
+
+# Predict the next day's closing price using a simple moving average
+next_close = df['Close'].rolling(window=5).mean().iloc[-1]
+
+# Backtest the model
+accuracy, hit_ratio = backtest_model(model, X_test, y_test, le)
+
+
 # Filter the last 6 months of data
 six_months_ago = df.index[-1] - pd.DateOffset(months=6)
 df_last_6_months = df[df.index >= six_months_ago]
@@ -144,16 +218,13 @@ df_last_6_months = df[df.index >= six_months_ago]
 # Get automated swing highs and lows for the last 6 months
 swing_highs, swing_lows = find_swing_points(df_last_6_months)
 
-# Create the candlestick chart
+
+# Create candlestick chart with trend lines
 fig = go.Figure()
 
-# Candlestick trace
-fig.add_trace(go.Candlestick(x=df.index,
-                              open=df['Open'],
-                              high=df['High'],
-                              low=df['Low'],
-                              close=df['Close'],
-                              name='Candlestick'))
+# Candlestick chart
+fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'],
+                             low=df['Low'], close=df['Close'], name='Price'))
 
 # Resistance and Support lines
 fig.add_trace(go.Scatter(x=df.index, y=df['Resistance'],
@@ -161,11 +232,20 @@ fig.add_trace(go.Scatter(x=df.index, y=df['Resistance'],
 fig.add_trace(go.Scatter(x=df.index, y=df['Support'],
                          mode='lines', name='Support', line=dict(color='green', width=2, dash='dash')))
 
-# Future price marker
-fig.add_trace(go.Scatter(x=[future_date], y=[next_price],
-                         mode='markers+text', name='Future Price',
+# Add EMA to candlestick chart
+fig.add_trace(go.Scatter(x=df.index, y=df['EMA'], name='EMA', line=dict(color='orange')))
+
+# Add trend lines
+trend_lines = draw_trend_lines(df)
+for line in trend_lines:
+    fig.add_shape(type="line", x0=line['x0'], y0=line['y0'], x1=line['x1'], y1=line['y1'],
+                  line=dict(color=line['color'], width=2))
+
+# Add predicted next day's close
+fig.add_trace(go.Scatter(x=[df.index[-1] + pd.Timedelta(days=1)], y=[next_close],
+                         mode='markers+text', name='Predicted Next Close',
                          marker=dict(color='orange', size=10),
-                         text=[f'Future Price: {next_price:.2f} <br>Future Trend: {trend_map[model.predict(scaler.transform([last_features]))[0]]}'],
+                         text=[f'Predicted Price: {next_close:.2f} <br>Predicted Trend: {trend}'],
                          textposition='top center'))
 
 # Refine trendlines based on the swing points
@@ -195,12 +275,38 @@ y_max = df_last_6_months['High'].max() * 1.05  # 5% above the highest high
 x_min = df_last_6_months.index.min()
 x_max = df_last_6_months.index.max() + pd.DateOffset(days=15)
 
-fig.update_layout(title='Nifty50 Stock Price Prediction',
-                  xaxis_title='Date',
-                  yaxis_title='Price',
-                  xaxis_rangeslider_visible=False,
-                  yaxis=dict(range=[y_min, y_max]),
-                  xaxis=dict(range=[x_min, x_max]))
+# Update layout
+fig.update_layout(
+    title_text=f'Stock Price Prediction (Predicted Trend: {trend})',
+    xaxis_title="Date",
+    yaxis_title="Price",
+    xaxis_rangeslider_visible=False,
+    yaxis=dict(range=[y_min, y_max]),
+    xaxis=dict(range=[x_min, x_max])
+)
+
+# Add backtesting results to the chart
+backtest_text = f"""
+Backtesting Results:
+Overall Accuracy: {accuracy:.2f}
+Hit Ratios:
+  Bullish: {hit_ratio['bullish']['ratio']:.2f} ({hit_ratio['bullish']['correct']}/{hit_ratio['bullish']['total']})
+  Bearish: {hit_ratio['bearish']['ratio']:.2f} ({hit_ratio['bearish']['correct']}/{hit_ratio['bearish']['total']})
+  Sideways: {hit_ratio['sideways']['ratio']:.2f} ({hit_ratio['sideways']['correct']}/{hit_ratio['sideways']['total']})
+"""
+
+fig.add_annotation(
+    xref="paper", yref="paper",
+    x=0.02, y=0.98,
+    text=backtest_text,
+    showarrow=False,
+    font=dict(size=10),
+    align="left",
+    bgcolor="rgba(255,255,255,0.8)",
+    bordercolor="black",
+    borderwidth=1
+)
+
 
 # Show the plot
 fig.show()
@@ -209,3 +315,8 @@ fig.show()
 fig.write_html('chart.html')  # Output file name
 
 print("Chart has been saved as 'chart.html'")
+
+print(f"Predicted trend: {trend}")
+print(f"Predicted next day's closing price: {next_close:.2f}")
+print("The interactive chart has been saved as 'stock_prediction.html'")
+print(backtest_text)
