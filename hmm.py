@@ -25,7 +25,7 @@ def calculate_volatility(data, window=20):
 def calculate_ema(data, window=20):
     return data.ewm(span=window, adjust=False).mean()
 
-def identify_trend_dow_improved(df, window=20, range_threshold=0.02):
+def identify_trend_dow_improved(df, window=5, range_threshold=0.02):
     """
     Enhanced Dow Theory trend identification with range-bound market detection
     """
@@ -268,20 +268,18 @@ def find_swing_points(df, window=5):
     lows = df['Low']
     swing_highs = []
     swing_lows = []
-
-    for i in range(window, len(df) - window):
-        # Detect swing high
-        if (highs[i] == highs[i-window:i+window+1].max() and
-            (i == window or highs[i] > highs[i-1]) and
-            (i == len(df)-window-1 or highs[i] > highs[i+1])):
-            swing_highs.append((df.index[i], highs[i]))
-
-        # Detect swing low
-        if (lows[i] == lows[i-window:i+window+1].min() and
-            (i == window or lows[i] < lows[i-1]) and
-            (i == len(df)-window-1 or lows[i] < lows[i+1])):
-            swing_lows.append((df.index[i], lows[i]))
-
+    
+    for i in range(window, len(df) - 1):  # Adjust the range to len(df) - 1
+        if (highs.iloc[i] == highs.iloc[i-window:i+window+1].max() and
+            (i == window or highs.iloc[i] > highs.iloc[i-1]) and
+            (i == len(df)-window-1 or highs.iloc[i] > highs.iloc[i+1])):
+            swing_highs.append((df.index[i], highs.iloc[i]))
+    
+        if (lows.iloc[i] == lows.iloc[i-window:i+window+1].min() and
+            (i == window or lows.iloc[i] < lows.iloc[i-1]) and
+            (i == len(df)-window-1 or lows.iloc[i] < lows.iloc[i+1])):
+            swing_lows.append((df.index[i], lows.iloc[i]))
+    
     return swing_highs, swing_lows
 
 def backtest_model(model, X, y, le):
